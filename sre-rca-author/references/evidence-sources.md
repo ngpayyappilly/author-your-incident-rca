@@ -59,4 +59,6 @@ Adapt syntax to the tool. Intent matters more than syntax.
 
 ## 5. Adapting to your stack
 
-Keep org-specific wiring in one place so the rest of the skill stays portable. Create `assets/stack.md` listing for each capability above: the tool, how to reach it (connector, CLI, API), the service-catalog key, the dashboard or saved-search conventions, and where RCAs and action items live (for example a wiki space for RCA pages and a work-tracking project/area path for action items). The agent reads it during Phase 1 and Phase 2 if present.
+Keep org-specific wiring in one place so the rest of the skill stays portable. `assets/stack.md` lists, for each capability above: the tool, how to reach it (connector, CLI, API), the service-catalog key, the dashboard or saved-search conventions, where RCAs and action items live (for example a wiki space for RCA pages and a work-tracking project/area path for action items), and the access gaps that lower Draft Confidence. The agent reads it during Phase 1 and Phase 2 if present.
+
+Treat the filled-in file as sensitive: it describes how your telemetry and ticketing are reached. Publish only a placeholder version; keep the real one in a private repo or pipeline. Credentials never go in it, only the names of the environment variables or secret-store entries that hold them.

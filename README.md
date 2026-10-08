@@ -30,6 +30,7 @@ sre-rca-author/
 │   └── scale-architecture.md        batch design, service-profile cache, depth tiers, fleet metrics, rollout phases
 └── assets/
     ├── intake_template.yaml         what to collect from the RCA owner
+    ├── stack.md                     org-specific wiring: tools, access paths, conventions, access gaps (fill in privately)
     └── example-rca.md               a complete, validator-clean example (fictional incident)
 ```
 
