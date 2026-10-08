@@ -1,4 +1,4 @@
-# sre-rca-author
+# Author your Incident RCA
 
 An agent skill that drafts **Google SRE-style RCA / postmortem documents** from an RCA owner's inputs: evidence-grounded, blameless, and checked by a deterministic validator before a human ever reads it.
 
