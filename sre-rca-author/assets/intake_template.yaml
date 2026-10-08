@@ -1,0 +1,35 @@
+# RCA intake contract. The RCA owner fills what they know; the agent fills the rest
+# from systems. Only the `required` block must be present to start.
+
+required:
+  incident_id: ""            # e.g. INC0012345
+  incident_link: ""          # ticket / channel URL
+  services: []               # affected service names as in the service catalog
+  impact_start_utc: ""       # ISO-8601, best known
+  impact_end_utc: ""
+  impact_summary: ""         # one line, in the owner's words
+  rca_owner: ""
+  reviewers: []
+
+optional:
+  severity: ""               # P1 / P2 / P3
+  suspected_trigger: ""      # owner's hypothesis; the agent must test it, not adopt it
+  known_changes: []          # deploys, config, flag flips, infra work the owner already knows about
+  mitigation_taken: ""
+  customer_comms: ""         # what was told to members/customers
+  related_incidents: []
+  chat_transcript: ""        # path or link to the incident channel export
+  dashboards: []             # links the owner used during the incident
+  tracking_system: ""        # where action items get filed, e.g. ADO project/area path
+  constraints: []            # e.g. "no access to prod logs", "legal review required"
+
+agent_defaults:
+  evidence_window_before_hours: 2
+  evidence_window_after_hours: 1
+  change_lookback_hours: 24
+  baseline: same weekday and hour, previous week
+  max_validate_loops: 3
+  depth_by_severity:
+    P1: full
+    P2: standard
+    P3: lite
