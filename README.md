@@ -40,6 +40,15 @@ sre-rca-author/
 
 **Claude (claude.ai / Claude Code):** download `sre-rca-author.skill` from this repo, or copy the `sre-rca-author/` folder into your skills directory (for Claude Code, `~/.claude/skills/`).
 
+`sre-rca-author.skill` is generated from the `sre-rca-author/` folder, never edited by hand. After changing anything under that folder, rebuild it and commit the result:
+
+```bash
+python scripts/build_skill.py          # lint SKILL.md front matter, then rewrite the bundle
+python scripts/build_skill.py --check  # what CI runs: fails if the committed bundle is stale
+```
+
+The build is byte-reproducible (sorted entries, fixed timestamps), so a clean tree rebuilds to identical bytes.
+
 **Other agents (for example GitHub Copilot):** the skill is plain Markdown plus one Python script. Agents that support `SKILL.md`-style skills can load the folder directly; others can use `SKILL.md` as a custom agent or instructions file and point it at the `references/` folder. Check your agent's current support and your organisation's policies.
 
 ## Use
