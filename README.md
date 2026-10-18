@@ -1,5 +1,7 @@
 # Author your Incident RCA
 
+[![CI](https://github.com/ngpayyappilly/author-your-incident-rca/actions/workflows/ci.yml/badge.svg)](https://github.com/ngpayyappilly/author-your-incident-rca/actions/workflows/ci.yml)
+
 An agent skill that drafts **Google SRE-style RCA / postmortem documents** from an RCA owner's inputs: evidence-grounded, blameless, and checked by a deterministic validator before a human ever reads it.
 
 The agent takes an incident, learns the affected service, collects evidence from your observability, deploy, ticketing and chat systems, reconstructs the timeline, finds the bottleneck and contributing factors, proposes owned and tracked action items, and hands a draft to the RCA owner. The human owns the conclusions and the sign-off.
@@ -58,6 +60,16 @@ python sre-rca-author/scripts/validate_rca.py path/to/rca.md --json report.json
 ```
 
 The validator checks required sections, anchor timestamps and ordering, evidence coverage and dangling citations, root-cause and trigger statements, blameless language, action-item completeness, factor-to-action coverage, unresolved placeholders, and a pre-approved sign-off block. It also computes TTD / TTA / TTM / TTR from the metadata so prose and timestamps cannot drift apart.
+
+## Development
+
+The validator is the quality gate for every draft, so it has its own tests (standard library only, no install step):
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Each error and warning code the validator can emit has a test case that mutates the example RCA until that code fires. A meta-test fails if the validator gains a code without a matching case. When you change `validate_rca.py`, `references/rca-template.md` or `assets/example-rca.md`, run the tests and update the cases in the same change.
 
 ## Adapting to your stack
 
