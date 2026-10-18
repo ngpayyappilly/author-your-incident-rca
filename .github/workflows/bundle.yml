@@ -1,0 +1,30 @@
+name: Bundle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  bundle-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Lint SKILL.md front matter and check the .skill bundle is current
+        run: python scripts/build_skill.py --check
+      - name: Bundle script tests
+        run: python -m unittest discover -s tests -p 'test_build_skill.py' -v
