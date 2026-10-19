@@ -56,7 +56,7 @@ Open `references/evidence-sources.md` for source adapters and the ledger format,
 
 ### Phase 3: Reconstruct the timeline
 
-Build the timeline in UTC from machine sources first (metrics, deploy events, alerts), then overlay human sources (chat, tickets). Machine timestamps win conflicts. Identify the five anchor times: **impact start, detected, acknowledged, mitigated, resolved**. These feed TTD/TTA/TTM/TTR, which the validator computes from the metadata table so the numbers in the prose cannot drift from the timestamps.
+Build the timeline in UTC from machine sources first (metrics, deploy events, alerts), then overlay human sources (chat, tickets). Machine timestamps win conflicts. Identify the five anchor times: **impact start, detected, acknowledged, mitigated, resolved**. These feed TTD/TTA/TTM/TTR (definitions in `references/analysis-playbook.md`); the validator computes them from the metadata table and fails the draft if the figures in Section 6 disagree, so the prose cannot drift from the timestamps.
 
 Look specifically for the **detection gap** (impact start to first alert) and the **mitigation gap** (detected to mitigated). Those gaps are where reliability improvements usually live.
 

@@ -9,6 +9,19 @@ Contents: 1. Impact and SLO math · 2. Finding the bottleneck · 3. Change corre
 - Burn rate = observed error rate / allowed error rate. A burn rate of 14.4 sustained for 1h consumes 2% of a 30-day budget; use this to judge whether multi-window burn-rate alerts should have fired and when.
 - Scope impact by dimension: region, tenant/member segment, endpoint, client version. "Partial" must be quantified or it is meaningless.
 
+### Detection and response metrics
+
+Computed from the five anchor timestamps in Section 1. The validator derives them and checks that the figures written in Section 6 agree (exact to the minute; one minute of slack when an anchor carries seconds).
+
+| Metric | Definition | Question it answers |
+|---|---|---|
+| TTD (time to detect) | Detected - Impact Start | How long were we blind? |
+| TTA (time to acknowledge) | Acknowledged - Detected | How long until a human engaged? |
+| TTM (time to mitigate) | Mitigated - Detected | How long did response take once we knew? |
+| TTR (time to resolve) | Resolved - Impact Start | How long did the whole incident last? |
+
+TTM is measured from detection by default. Some teams measure it from impact start, which includes the detection gap; run the validator with `--ttm-from impact_start` for that definition, and say which one you use in the RCA so readers compare like with like.
+
 ## 2. Finding the bottleneck
 
 Walk the request path from the user inward and compare each hop to baseline. The first hop that deviates is where to dig; deviations further in may be effects.
