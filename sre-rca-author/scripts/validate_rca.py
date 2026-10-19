@@ -2,7 +2,7 @@
 """Deterministic quality gate for RCA documents produced by the sre-rca-author skill.
 
 Usage:
-    python validate_rca.py rca.md [--json report.json] [--tier full|lite]
+    python validate_rca.py rca.md [--json report.json] [--tier full|lite] [--ttm-from detected|impact_start]
 
 Exit code 0 = no errors (warnings allowed), 1 = errors found, 2 = usage/file error.
 Standard library only.
@@ -32,6 +32,16 @@ SECTIONS = [
     ("10", "Appendix and Sign-Off"),
 ]
 LITE_REQUIRED = {"1", "2", "3", "4", "5", "6", "7"}
+
+# Metric definitions. TTM is measured from Detected by default; --ttm-from impact_start
+# measures it from Impact Start instead.
+IMPACT_START, DETECTED, ACKNOWLEDGED, MITIGATED, RESOLVED = (
+    "Impact Start (UTC)", "Detected (UTC)", "Acknowledged (UTC)", "Mitigated (UTC)", "Resolved (UTC)",
+)
+METRIC_ORDER = ["TTD", "TTA", "TTM", "TTR"]
+METRIC_LABEL_RE = re.compile(r"\*\*TTD\s*/\s*TTA\s*/\s*TTM\s*/\s*TTR:?\*\*(.*)")
+DURATION_UNIT = r"(?:hours?|hrs?|h|minutes?|mins?|m)(?![A-Za-z])"
+DURATION_TOKEN_RE = re.compile(rf"\s*(\d+(?:\.\d+)?)\s*({DURATION_UNIT})", re.I)
 
 ANCHORS = [
     "Impact Start (UTC)",
@@ -83,6 +93,33 @@ def parse_ts(s):
     return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
 
 
+def parse_duration(text):
+    """Minutes for a leading duration such as '12 min', '1h 3m', '1 h 03 min', '63 minutes'.
+
+    Only the leading run of number+unit tokens is read, so trailing prose is ignored.
+    Returns None when the text does not start with a duration.
+    """
+    pos, total, seen = 0, 0.0, False
+    while True:
+        m = DURATION_TOKEN_RE.match(text, pos)
+        if not m:
+            break
+        value = float(m.group(1))
+        total += value * 60 if m.group(2).lower().startswith("h") else value
+        pos, seen = m.end(), True
+    return total if seen else None
+
+
+def metric_spans(ttm_from):
+    """(start_anchor, end_anchor) for each metric."""
+    return {
+        "TTD": (IMPACT_START, DETECTED),
+        "TTA": (DETECTED, ACKNOWLEDGED),
+        "TTM": (IMPACT_START if ttm_from == "impact_start" else DETECTED, MITIGATED),
+        "TTR": (IMPACT_START, RESOLVED),
+    }
+
+
 def split_sections(lines):
     """Return {section_number: (start_line_idx, [lines])} keyed by '## N. Title' headings."""
     heads = []
@@ -116,7 +153,35 @@ def table_rows(sec_lines):
     return tables
 
 
-def check(text, tier):
+def check_prose_metrics(r, section, computed):
+    """Compare the '**TTD / TTA / TTM / TTR:**' line in Section 6 with the metadata timestamps."""
+    line_no, rest = None, None
+    for i, ln in enumerate(section["lines"]):
+        m = METRIC_LABEL_RE.search(ln)
+        if m:
+            line_no, rest = section["start"] + 2 + i, m.group(1)
+            break
+    if rest is None:
+        r.err("METRIC_MISSING", "Section 6 needs a '**TTD / TTA / TTM / TTR:** 12 min / 4 min / 32 min / 63 min' line "
+                                "so the figures can be checked against the Section 1 timestamps")
+        return
+    values = [parse_duration(seg) for seg in rest.lstrip(" :").split("/")[:4]]
+    if len(values) < 4 or any(v is None for v in values):
+        r.err("METRIC_MISSING", "TTD / TTA / TTM / TTR line must list four durations separated by '/', "
+                                "in that order, each with a unit (e.g. '12 min / 4 min / 32 min / 1h 3m')", line_no)
+        return
+    for key, prose in zip(METRIC_ORDER, values):
+        start, end = computed["spans"][key]
+        ts = computed["ts"]
+        slack = 1.0 if (ts[start].second or ts[end].second) else 0.0
+        expected = computed["minutes"][key]
+        if abs(prose - expected) > slack + 1e-9:
+            r.err("METRIC_MISMATCH",
+                  f"{key} is {prose:g} min in Section 6 but the Section 1 timestamps give {expected:.1f} min "
+                  f"({start} to {end})", line_no)
+
+
+def check(text, tier, ttm_from="detected"):
     r = Report()
     lines = text.splitlines()
 
@@ -146,6 +211,7 @@ def check(text, tier):
 
     # Metadata
     meta = {}
+    computed = None
     if "1" in secs:
         for header, rows, _ in table_rows(secs["1"]["lines"]):
             for cells, _ in rows:
@@ -170,13 +236,11 @@ def check(text, tier):
             ordered = [ts[a] for a in ANCHORS]
             if ordered != sorted(ordered):
                 r.err("META_ORDER", "Anchor timestamps are not in order: start <= detected <= acknowledged <= mitigated <= resolved")
-            mins = lambda a, b: round((ts[b] - ts[a]).total_seconds() / 60, 1)
-            r.info["computed_metrics_minutes"] = {
-                "TTD": mins("Impact Start (UTC)", "Detected (UTC)"),
-                "TTA": mins("Detected (UTC)", "Acknowledged (UTC)"),
-                "TTM": mins("Detected (UTC)", "Mitigated (UTC)"),
-                "TTR": mins("Impact Start (UTC)", "Resolved (UTC)"),
-            }
+            spans = metric_spans(ttm_from)
+            minutes = {k: (ts[b] - ts[a]).total_seconds() / 60 for k, (a, b) in spans.items()}
+            r.info["computed_metrics_minutes"] = {k: round(v, 1) for k, v in minutes.items()}
+            r.info["metric_definitions"] = {k: f"{a} -> {b}" for k, (a, b) in spans.items()}
+            computed = {"minutes": minutes, "spans": spans, "ts": ts}
 
     # Executive summary length
     if "2" in secs:
@@ -256,6 +320,8 @@ def check(text, tier):
         for key in ["TTD", "TTA", "TTM", "TTR"]:
             if key not in body:
                 r.warn("DETECTION_METRIC", f"Section 6 does not mention {key}")
+        if computed:
+            check_prose_metrics(r, secs["6"], computed)
         if not re.search(r"lucky", body, re.I):
             r.warn("NO_LUCK", "Section 6 has no 'Where we got lucky' entry (write 'None identified' if true)")
 
@@ -357,6 +423,8 @@ def main():
     ap.add_argument("path")
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--tier", choices=["full", "lite"], default="full")
+    ap.add_argument("--ttm-from", choices=["detected", "impact_start"], default="detected",
+                    help="start point for TTM (default: detected)")
     args = ap.parse_args()
     try:
         text = open(args.path, encoding="utf-8").read()
@@ -364,10 +432,11 @@ def main():
         print(f"cannot read {args.path}: {e}", file=sys.stderr)
         return 2
 
-    rep = check(text, args.tier)
+    rep = check(text, args.tier, args.ttm_from)
     result = {
         "file": args.path,
         "tier": args.tier,
+        "ttm_from": args.ttm_from,
         "passed": not rep.errors,
         "errors": rep.errors,
         "warnings": rep.warnings,

@@ -120,10 +120,10 @@ Validate any draft yourself:
 
 ```bash
 python sre-rca-author/scripts/validate_rca.py path/to/rca.md --json report.json
-# exit 0 = pass, 1 = errors, 2 = file error;  --tier lite for P3 / near-miss drafts
+# exit 0 = pass, 1 = errors, 2 = file error;  --tier lite for P3 / near-miss drafts;  --ttm-from impact_start to measure TTM from impact start
 ```
 
-The validator checks required sections, anchor timestamps and ordering, evidence coverage and dangling citations, root-cause and trigger statements, blameless language, action-item completeness, factor-to-action coverage, unresolved placeholders, and a pre-approved sign-off block. It also computes TTD / TTA / TTM / TTR from the metadata so prose and timestamps cannot drift apart.
+The validator checks required sections, anchor timestamps and ordering, evidence coverage and dangling citations, root-cause and trigger statements, blameless language, action-item completeness, factor-to-action coverage, unresolved placeholders, and a pre-approved sign-off block. It also computes TTD / TTA / TTM / TTR from the metadata and fails the draft when the figures written in Section 6 disagree, so prose and timestamps cannot drift apart. TTM counts from detection by default; use `--ttm-from impact_start` to count it from impact start.
 
 ## Development
 

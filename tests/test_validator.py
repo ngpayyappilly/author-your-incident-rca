@@ -59,6 +59,10 @@ CASES = {
     # --- detection and response ---
     "DETECTION_METRIC": ("warnings", lambda t: mutate(
         t, "**TTD / TTA / TTM / TTR:** 12 min / 4 min / 32 min / 63 min, computed from the metadata timestamps.", "**Timings:** see metadata.")),
+    "METRIC_MISSING": ("errors", lambda t: mutate(
+        t, "12 min / 4 min / 32 min / 63 min, computed", "12 min / 4 min, computed")),
+    "METRIC_MISMATCH": ("errors", lambda t: mutate(
+        t, "12 min / 4 min / 32 min / 63 min, computed", "12 min / 4 min / 35 min / 63 min, computed")),
     "NO_LUCK": ("warnings", lambda t: mutate(t, "Where we got lucky", "Other notes")),
     # --- action items ---
     "ACTIONS_TABLE": ("errors", lambda t: mutate(t, "| ID | Action | Type |", "| Num | Action | Type |")),
@@ -190,6 +194,115 @@ class Tiers(unittest.TestCase):
         self.assertIn("SECTION_MISSING", h.codes(validate_rca.check(text, "lite"))["errors"])
 
 
+METRICS_LINE = "**TTD / TTA / TTM / TTR:** 12 min / 4 min / 32 min / 63 min, computed from the metadata timestamps."
+
+
+def with_metrics(values):
+    return mutate(EXAMPLE, METRICS_LINE, f"**TTD / TTA / TTM / TTR:** {values}")
+
+
+def error_messages(text, code, **kw):
+    return [e["message"] for e in validate_rca.check(text, "full", **kw).errors if e["code"] == code]
+
+
+class ParseDuration(unittest.TestCase):
+    def test_formats(self):
+        cases = {
+            "12 min": 12, "12min": 12, "12 mins": 12, "63 minutes": 63, "1 minute": 1, "5m": 5,
+            "1h 3m": 63, "1 h 03 min": 63, "1h03m": 63, "2 hours": 120, "1 hr 30 min": 90,
+            "1.5 h": 90, "0 min": 0, "12 min, computed from the timestamps": 12,
+        }
+        for text, minutes in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(validate_rca.parse_duration(text), minutes)
+
+    def test_unparseable(self):
+        for text in ["", "  ", "n/a", "twelve minutes", "12", "min 12", ", 12 min"]:
+            with self.subTest(text=text):
+                self.assertIsNone(validate_rca.parse_duration(text))
+
+    def test_stops_at_trailing_prose(self):
+        self.assertEqual(validate_rca.parse_duration("63 min (over a 2 h window)"), 63)
+
+
+class ProseMetrics(unittest.TestCase):
+    def test_example_matches(self):
+        rep = validate_rca.check(EXAMPLE, "full")
+        self.assertEqual([e for e in rep.errors if e["code"].startswith("METRIC_")], [])
+
+    def test_alternate_duration_formats_pass(self):
+        for values in ["12 min / 4 min / 32 min / 1h 3m", "12 minutes / 4 minutes / 32 minutes / 63 minutes",
+                       "12m / 4m / 32m / 1 h 03 min"]:
+            with self.subTest(values=values):
+                self.assertEqual(error_messages(with_metrics(values), "METRIC_MISMATCH"), [])
+                self.assertEqual(error_messages(with_metrics(values), "METRIC_MISSING"), [])
+
+    def test_mismatch_names_metric_prose_and_computed_values(self):
+        msgs = error_messages(with_metrics("12 min / 4 min / 35 min / 63 min"), "METRIC_MISMATCH")
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("TTM is 35 min", msgs[0])
+        self.assertIn("32.0 min", msgs[0])
+
+    def test_every_metric_is_checked(self):
+        for i, key in enumerate(["TTD", "TTA", "TTM", "TTR"]):
+            vals = ["12", "4", "32", "63"]
+            vals[i] = "99"
+            with self.subTest(key=key):
+                msgs = error_messages(with_metrics(" / ".join(f"{v} min" for v in vals)), "METRIC_MISMATCH")
+                self.assertEqual(len(msgs), 1)
+                self.assertTrue(msgs[0].startswith(key))
+
+    def test_missing_line_is_an_error(self):
+        text = mutate(EXAMPLE, METRICS_LINE, "**Timings:** see the metadata table.")
+        self.assertEqual(len(error_messages(text, "METRIC_MISSING")), 1)
+
+    def test_fewer_than_four_values(self):
+        self.assertEqual(len(error_messages(with_metrics("12 min / 4 min / 32 min"), "METRIC_MISSING")), 1)
+
+    def test_value_without_unit_is_rejected(self):
+        self.assertEqual(len(error_messages(with_metrics("12 / 4 / 32 / 63"), "METRIC_MISSING")), 1)
+
+    def test_one_minute_slack_when_timestamps_carry_seconds(self):
+        # Example anchors include 14:19:00Z; give Detected seconds so TTD becomes 12.5 min and TTA 3.5 min.
+        text = mutate(EXAMPLE, "| Detected (UTC) | 2026-09-22T14:19:00Z |", "| Detected (UTC) | 2026-09-22T14:19:30Z |")
+        text = mutate(text, METRICS_LINE, "**TTD / TTA / TTM / TTR:** 13 min / 4 min / 32 min / 63 min")
+        self.assertEqual(error_messages(text, "METRIC_MISMATCH"), [])
+
+    def test_exact_to_the_minute_without_seconds(self):
+        # No anchor carries seconds, so a one-minute difference is a mismatch.
+        self.assertEqual(len(error_messages(with_metrics("13 min / 4 min / 32 min / 63 min"), "METRIC_MISMATCH")), 1)
+
+    def test_skipped_when_metadata_timestamps_are_invalid(self):
+        text = mutate(EXAMPLE, "| Detected (UTC) | 2026-09-22T14:19:00Z |", "| Detected (UTC) | yesterday |")
+        rep = validate_rca.check(text, "full")
+        self.assertIn("META_TIMESTAMP", h.codes(rep)["errors"])
+        self.assertEqual([e for e in rep.errors if e["code"].startswith("METRIC_")], [])
+
+
+class TtmDefinition(unittest.TestCase):
+    def test_default_is_detected_to_mitigated(self):
+        rep = validate_rca.check(EXAMPLE, "full")
+        self.assertEqual(rep.info["computed_metrics_minutes"]["TTM"], 32.0)
+        self.assertEqual(rep.info["metric_definitions"]["TTM"], "Detected (UTC) -> Mitigated (UTC)")
+
+    def test_impact_start_changes_the_computed_value(self):
+        rep = validate_rca.check(EXAMPLE, "full", ttm_from="impact_start")
+        self.assertEqual(rep.info["computed_metrics_minutes"]["TTM"], 44.0)
+        self.assertEqual(rep.info["metric_definitions"]["TTM"], "Impact Start (UTC) -> Mitigated (UTC)")
+
+    def test_prose_must_follow_the_chosen_definition(self):
+        self.assertEqual(len(error_messages(EXAMPLE, "METRIC_MISMATCH", ttm_from="impact_start")), 1)
+        text = with_metrics("12 min / 4 min / 44 min / 63 min")
+        self.assertEqual(error_messages(text, "METRIC_MISMATCH", ttm_from="impact_start"), [])
+        self.assertEqual(len(error_messages(text, "METRIC_MISMATCH")), 1)
+
+    def test_other_metrics_unaffected(self):
+        base = validate_rca.check(EXAMPLE, "full").info["computed_metrics_minutes"]
+        alt = validate_rca.check(EXAMPLE, "full", ttm_from="impact_start").info["computed_metrics_minutes"]
+        for key in ("TTD", "TTA", "TTR"):
+            self.assertEqual(base[key], alt[key])
+
+
 class Cli(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(h.VALIDATOR), *args], capture_output=True, text=True)
@@ -217,9 +330,18 @@ class Cli(unittest.TestCase):
             res = self.run_cli(str(h.EXAMPLE), "--json", str(out))
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             data = json.loads(out.read_text(encoding="utf-8"))
-        self.assertEqual(set(data), {"file", "tier", "passed", "errors", "warnings", "info"})
+        self.assertEqual(set(data), {"file", "tier", "ttm_from", "passed", "errors", "warnings", "info"})
         self.assertTrue(data["passed"])
         self.assertEqual(data["tier"], "full")
+        self.assertEqual(data["ttm_from"], "detected")
+
+    def test_ttm_from_flag(self):
+        res = self.run_cli(str(h.EXAMPLE), "--ttm-from", "impact_start")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("METRIC_MISMATCH", res.stdout)
+        self.assertIn("TTM is 32 min", res.stdout)
+        res = self.run_cli(str(h.EXAMPLE), "--ttm-from", "bogus")
+        self.assertEqual(res.returncode, 2)
 
     def test_tier_flag_is_applied(self):
         with tempfile.TemporaryDirectory() as d:

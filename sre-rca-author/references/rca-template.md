@@ -75,7 +75,7 @@ Include at least: triggering change or condition, first abnormal signal, first a
 
 ## 6. Detection and Response Analysis
 
-- **TTD / TTA / TTM / TTR:** {{values; must agree with metadata timestamps}}
+- **TTD / TTA / TTM / TTR:** {{four durations in this order, separated by `/`, each with a unit, e.g. `12 min / 4 min / 32 min / 63 min`; the validator checks them against the Section 1 timestamps}}
 - **How we found out:** {{alert, customer report, engineer noticed}} [E-0xx]
 - **Detection gap:** {{why alerting did or did not fire sooner}}
 - **Response effectiveness:** {{what helped, what slowed us: runbooks, access, escalation, tooling}}
