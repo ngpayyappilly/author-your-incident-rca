@@ -146,6 +146,8 @@ Org-specific wiring stays out of the core skill. Add an `assets/stack.md` that m
 - The agent never marks an RCA approved; the sign-off block stays Pending.
 - Running at scale (one isolated worker per incident, shared service-profile cache, severity-tiered depth and budgets, fleet metrics) is covered in `references/scale-architecture.md`.
 
+- The target architecture for unattended, harness-driven runs (state machine, tool gateway, evidence ledger, model adapter, gates, SLOs) is proposed in [`docs/architecture/harness-driven-rca.md`](docs/architecture/harness-driven-rca.md).
+
 The example RCA is fictional; any resemblance to a real incident is coincidental.
 
 ## License
