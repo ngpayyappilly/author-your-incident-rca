@@ -11,8 +11,8 @@ Every fact in the RCA traces to a ledger row. Keep raw outputs under `evidence/E
 | ID | `E-001`, sequential, never reused |
 | Source | System name (e.g. Splunk Observability, Dynatrace, ServiceNow, Argo CD) |
 | Query / Link | The exact query or a stable URL a reviewer can re-run |
-| Time Range | UTC start-end the query covered |
-| Key Finding | One or two sentences, factual, with numbers and units |
+| Time Range | UTC start-end the query covered, e.g. `2026-09-22T13:00Z-16:00Z` |
+| Key Finding | One or two sentences, factual, with numbers and units. Every number the RCA cites from this row must appear here |
 | Collected (UTC) | When the agent ran it; metrics retention can expire |
 
 Empty results and query failures get rows too (`collection gap`).

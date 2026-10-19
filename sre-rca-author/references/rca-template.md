@@ -116,7 +116,7 @@ Type is one of Prevent, Detect, Mitigate. Every CF-n must appear in some row's A
 
 | ID | Source | Query / Link | Time Range | Key Finding | Collected (UTC) |
 |---|---|---|---|---|---|
-| E-001 | {{system}} | {{query or URL}} | {{range}} | {{excerpt}} | {{ISO}} |
+| E-001 | {{system}} | {{query or URL}} | {{2026-09-22T13:00Z-16:00Z}} | {{excerpt with the numbers the document cites}} | {{ISO}} |
 
 ### 10.2 Open Questions
 

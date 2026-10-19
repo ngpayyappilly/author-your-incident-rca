@@ -2,7 +2,7 @@
 """Deterministic quality gate for RCA documents produced by the sre-rca-author skill.
 
 Usage:
-    python validate_rca.py rca.md [--json report.json] [--tier full|lite]
+    python validate_rca.py rca.md [--json report.json] [--tier full|lite] [--strict]
 
 Exit code 0 = no errors (warnings allowed), 1 = errors found, 2 = usage/file error.
 Standard library only.
@@ -32,6 +32,24 @@ SECTIONS = [
     ("10", "Appendix and Sign-Off"),
 ]
 LITE_REQUIRED = {"1", "2", "3", "4", "5", "6", "7"}
+
+LEDGER_ID_RE = re.compile(r"E-\d{3,}")
+DERIVED_RE = re.compile(r"\[derived:\s*([^\]]*)\]", re.I)
+# Text that looks numeric but is not a measured quantity; blanked out before numbers are extracted.
+NON_QUANTITY_RES = [
+    re.compile(r"\d{4}-\d{2}-\d{2}T[\d:.]+Z?"),         # ISO timestamps
+    re.compile(r"\d{4}-\d{2}-\d{2}"),                    # dates
+    re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?Z?"),         # clock times
+    re.compile(r"\b[A-Z]{1,5}-\d+\b"),                    # E-001, CF-1, A-1, ADO-4412, H-2
+    re.compile(r"\bINC\d+\b"),                            # incident numbers
+    re.compile(r"\bP[0-4]\b"),                             # severities and priorities
+    re.compile(r"\b[1-5]xx\b", re.I),                      # HTTP status classes
+]
+NUMBER_RE = re.compile(r"(?<![\w.])(\d+(?:,\d{3})*(?:\.\d+)?)(?![\w]*\d)")
+SCALE_WORDS = {"thousand": 1e3, "k": 1e3, "million": 1e6, "m": 1e6, "billion": 1e9, "b": 1e9}
+LEDGER_RANGE_RE = re.compile(
+    rf"^\s*({ISO})\s*(?:-|\u2013|to)\s*({ISO}|\d{{2}}:\d{{2}}(?::\d{{2}})?Z)\s*$"
+)
 
 ANCHORS = [
     "Impact Start (UTC)",
@@ -83,6 +101,149 @@ def parse_ts(s):
     return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
 
 
+def number_values(text):
+    """Numeric values in text, including scaled readings ('1.41 million' -> 1.41 and 1410000)."""
+    values = []
+    for m in NUMBER_RE.finditer(text):
+        try:
+            v = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        values.append(v)
+        word = re.match(r"\s*([A-Za-z]+)", text[m.end():])
+        if word and word.group(1).lower() in SCALE_WORDS:
+            values.append(v * SCALE_WORDS[word.group(1).lower()])
+    return values
+
+
+def quantities(sentence):
+    """(token text, [candidate values]) for each measured quantity in a sentence."""
+    blanked = sentence
+    for rx in NON_QUANTITY_RES:
+        blanked = rx.sub(lambda m: " " * len(m.group(0)), blanked)
+    blanked = re.sub(r"^\s*(?:\d+\.|[-*])\s+", " ", blanked)  # list markers
+    out = []
+    for m in NUMBER_RE.finditer(blanked):
+        vals = number_values(blanked[m.start():m.end() + 12])[:2] or []
+        first = vals[0] if vals else None
+        if first is None:
+            continue
+        # keep the scaled reading as a second candidate when followed by a scale word
+        cands = [first] + ([vals[1]] if len(vals) > 1 and vals[1] != first else [])
+        out.append((m.group(1), cands))
+    return out
+
+
+def split_sentences(line):
+    """Split a prose line into sentences, and a table row into its cells."""
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        return [c.strip() for c in stripped.strip("|").split("|")]
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z\[`*])", stripped)
+    return [p for p in parts if p]
+
+
+def parse_ledger(lines):
+    """Ledger rows from the table whose header starts with ID and has Source. Returns list of dicts."""
+    records = []
+    for header, rows, _ in table_rows(lines):
+        if not (header and header[0] == "ID" and "Source" in header):
+            continue
+        for cells, off in rows:
+            if cells and LEDGER_ID_RE.fullmatch(cells[0]):
+                rec = {h: (cells[i] if i < len(cells) else "") for i, h in enumerate(header)}
+                rec["_offset"] = off
+                records.append(rec)
+    return records
+
+
+def parse_ledger_range(text):
+    """(start, end) datetimes for a ledger Time Range such as '2026-09-22T13:00Z-16:00Z', else None."""
+    m = LEDGER_RANGE_RE.match(text)
+    if not m:
+        return None
+    start = parse_ts(m.group(1))
+    end_text = m.group(2)
+    if ISO_RE.fullmatch(end_text):
+        end = parse_ts(end_text)
+    else:
+        hh, mm = int(end_text[0:2]), int(end_text[3:5])
+        ss = int(end_text[6:8]) if end_text.count(":") == 2 else 0
+        try:
+            end = start.replace(hour=hh, minute=mm, second=ss)
+        except ValueError:
+            return None
+    return start, end
+
+
+def check_numeric_traceability(r, secs, ledger_by_id, strict):
+    """Numbers in cited sentences must appear in the Key Finding of a cited ledger row."""
+    traced = total = 0
+    emit = r.err if strict else r.warn
+    findings = {i: number_values(rec.get("Key Finding", "")) for i, rec in ledger_by_id.items()}
+    for sec_no in ("3", "5", "6"):
+        if sec_no not in secs:
+            continue
+        for i, line in enumerate(secs[sec_no]["lines"]):
+            if line.lstrip().startswith("#") or re.match(r"^\s*\|[\s:\-|]+\|\s*$", line):
+                continue
+            for sentence in split_sentences(line):
+                ids = {m for m in LEDGER_ID_RE.findall(sentence) if m in ledger_by_id}
+                if not ids or TAG_RE.search(sentence):
+                    continue
+                derived = set()
+                for dm in DERIVED_RE.finditer(sentence):
+                    derived.update(number_values(dm.group(1)))
+                body = DERIVED_RE.sub(" ", sentence)
+                known = [v for e in ids for v in findings[e]]
+                untraced = []
+                for token, cands in quantities(body):
+                    total += 1
+                    if any(abs(c - k) < 1e-9 for c in cands for k in known) or any(
+                            abs(c - d) < 1e-9 for c in cands for d in derived):
+                        traced += 1
+                    else:
+                        untraced.append(token)
+                if untraced:
+                    emit("CITATION_NUMBER_UNTRACED",
+                         f"{', '.join(untraced)} not found in the Key Finding of {', '.join(sorted(ids))}; "
+                         f"add it to the ledger row, cite the row that holds it, or mark it [derived: ...]: "
+                         f"'{sentence.strip()[:80]}'",
+                         secs[sec_no]["start"] + 2 + i)
+    r.info["numeric_traceability"] = {"traced": traced, "total": total}
+
+
+def check_ledger_fields(r, records, impact_start):
+    """Field-level checks on ledger rows; returns the set of valid IDs."""
+    seen = set()
+    for rec in records:
+        eid = rec["ID"]
+        if eid in seen:
+            r.err("LEDGER_DUPLICATE_ID", f"{eid} appears more than once in the Evidence Ledger")
+        seen.add(eid)
+        if not rec.get("Query / Link", "").strip():
+            r.err("LEDGER_QUERY_MISSING", f"{eid} has no Query / Link; a reviewer must be able to re-run it")
+        collected = rec.get("Collected (UTC)", "").strip()
+        if not ISO_RE.fullmatch(collected):
+            r.err("LEDGER_COLLECTED_INVALID", f"{eid}: 'Collected (UTC)' must be ISO-8601 UTC (got '{collected}')")
+        elif impact_start and parse_ts(collected) < impact_start:
+            r.err("LEDGER_COLLECTED_BEFORE_INCIDENT",
+                  f"{eid}: collected {collected} is before the impact start; check the timestamp")
+        rng = rec.get("Time Range", "").strip()
+        is_gap = "collection gap" in rec.get("Key Finding", "").lower()
+        parsed = parse_ledger_range(rng) if rng else None
+        if not is_gap and (parsed is None or parsed[0] > parsed[1]):
+            r.warn("LEDGER_RANGE_INVALID",
+                   f"{eid}: Time Range '{rng}' should be 'start-end', e.g. 2026-09-22T13:00Z-16:00Z")
+    ids = sorted(seen, key=lambda x: int(x[2:]))
+    if ids:
+        nums = [int(x[2:]) for x in ids]
+        gaps = [n for n in range(nums[0], nums[-1] + 1) if n not in set(nums)]
+        if gaps:
+            r.info["ledger_id_gaps"] = [f"E-{n:03d}" for n in gaps]
+    return seen
+
+
 def split_sections(lines):
     """Return {section_number: (start_line_idx, [lines])} keyed by '## N. Title' headings."""
     heads = []
@@ -116,7 +277,7 @@ def table_rows(sec_lines):
     return tables
 
 
-def check(text, tier):
+def check(text, tier, strict=False):
     r = Report()
     lines = text.splitlines()
 
@@ -146,6 +307,7 @@ def check(text, tier):
 
     # Metadata
     meta = {}
+    ts_map = {}
     if "1" in secs:
         for header, rows, _ in table_rows(secs["1"]["lines"]):
             for cells, _ in rows:
@@ -166,6 +328,7 @@ def check(text, tier):
                 r.err("META_TIMESTAMP", f"'{a}' must be ISO-8601 UTC like 2026-10-01T14:03:00Z (got '{v}')")
             else:
                 ts[a] = parse_ts(v)
+        ts_map = ts
         if len(ts) == len(ANCHORS):
             ordered = [ts[a] for a in ANCHORS]
             if ordered != sorted(ordered):
@@ -315,12 +478,11 @@ def check(text, tier):
 
     # Evidence ledger and citations
     ledger = set()
+    ledger_by_id = {}
     if "10" in secs:
-        for header, rows, _ in table_rows(secs["10"]["lines"]):
-            if header and header[0] == "ID" and "Source" in header:
-                for cells, _ in rows:
-                    if cells and re.fullmatch(r"E-\d{3,}", cells[0]):
-                        ledger.add(cells[0])
+        records = parse_ledger(secs["10"]["lines"])
+        ledger_by_id = {rec["ID"]: rec for rec in records}
+        ledger = check_ledger_fields(r, records, ts_map.get("Impact Start (UTC)"))
         if not ledger:
             r.err("LEDGER_MISSING", "Evidence Ledger (10.1) has no E-nnn rows")
     cited = set()
@@ -332,6 +494,7 @@ def check(text, tier):
         r.err("CITATION_DANGLING", f"{e} is cited but not defined in the Evidence Ledger")
     for e in sorted(ledger - cited):
         r.warn("LEDGER_UNUSED", f"{e} is in the ledger but never cited")
+    check_numeric_traceability(r, secs, ledger_by_id, strict)
     r.info["evidence_cited"] = len(cited)
     r.info["evidence_ledger_rows"] = len(ledger)
 
@@ -357,6 +520,8 @@ def main():
     ap.add_argument("path")
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--tier", choices=["full", "lite"], default="full")
+    ap.add_argument("--strict", action="store_true",
+                    help="treat untraced numbers in cited sentences as errors instead of warnings")
     args = ap.parse_args()
     try:
         text = open(args.path, encoding="utf-8").read()
@@ -364,10 +529,11 @@ def main():
         print(f"cannot read {args.path}: {e}", file=sys.stderr)
         return 2
 
-    rep = check(text, args.tier)
+    rep = check(text, args.tier, strict=args.strict)
     result = {
         "file": args.path,
         "tier": args.tier,
+        "strict": args.strict,
         "passed": not rep.errors,
         "errors": rep.errors,
         "warnings": rep.warnings,

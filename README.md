@@ -120,10 +120,10 @@ Validate any draft yourself:
 
 ```bash
 python sre-rca-author/scripts/validate_rca.py path/to/rca.md --json report.json
-# exit 0 = pass, 1 = errors, 2 = file error;  --tier lite for P3 / near-miss drafts
+# exit 0 = pass, 1 = errors, 2 = file error;  --tier lite for P3 / near-miss drafts;  --strict to fail on untraced numbers
 ```
 
-The validator checks required sections, anchor timestamps and ordering, evidence coverage and dangling citations, root-cause and trigger statements, blameless language, action-item completeness, factor-to-action coverage, unresolved placeholders, and a pre-approved sign-off block. It also computes TTD / TTA / TTM / TTR from the metadata so prose and timestamps cannot drift apart.
+The validator checks required sections, anchor timestamps and ordering, evidence coverage and dangling citations, root-cause and trigger statements, blameless language, action-item completeness, factor-to-action coverage, unresolved placeholders, and a pre-approved sign-off block. It traces numbers in cited sentences back to the cited ledger row (a warning, or an error with `--strict`) and checks the ledger's own fields. It also computes TTD / TTA / TTM / TTR from the metadata so prose and timestamps cannot drift apart.
 
 ## Development
 
