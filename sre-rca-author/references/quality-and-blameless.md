@@ -23,6 +23,8 @@ Refer to roles ("the on-call engineer", "the deploying team"), never names, unle
 - Every factual sentence in sections 3-6 carries `[E-nnn]` or a tag.
 - `[ASSUMPTION]` = a reasoned guess to be confirmed. `[UNVERIFIED]` = a claim from a human or document you could not check.
 - A claim supported only by the owner's recollection is `[UNVERIFIED]` until a system record confirms it.
+- **Numbers must trace.** In sections 3, 5 and 6, every number in a sentence that cites `[E-nnn]` must appear in the Key Finding of a row that sentence cites (formatting differences such as `1.9 s` vs `1.9s`, `1,410,000` vs `1.41 million` are fine). If the number is not in the row, add it to the Key Finding, cite the row that holds it, or, when you computed it, mark it `[derived: 12.8 = 0.29 x 44]` next to the citation. Sentences tagged `[ASSUMPTION]` or `[UNVERIFIED]` are exempt. Timestamps, IDs (`E-001`, `CF-1`) and status classes (`5xx`) are not counted as quantities. The check is a warning; `--strict` makes it an error.
+- Ledger rows need a re-runnable `Query / Link`, a `Time Range` written as `2026-09-22T13:00Z-16:00Z` (or two full ISO timestamps), and an ISO `Collected (UTC)` time that is not before the impact start. Rows for failed or empty queries start the Key Finding with `collection gap` and may omit the range.
 - Dangling citations (an ID not in the ledger) are errors. So are ledger rows no one cites; remove them or use them.
 
 ## Action item quality bar

@@ -84,6 +84,17 @@ CASES = {
     "LEDGER_UNUSED": ("warnings", lambda t: remove_all(t, " [E-010]")),
     # --- language and sign-off ---
     "BLAMELESS": ("warnings", lambda t: mutate(t, "No security impact identified:", "Human error caused it. No security impact identified:")),
+    "CITATION_NUMBER_UNTRACED": ("warnings", lambda t: mutate(
+        t, "**Member impact:** 29% of profile lookup", "**Member impact:** 41% of profile lookup")),
+    "LEDGER_DUPLICATE_ID": ("errors", lambda t: mutate(
+        t, "| E-002 | Argo CD | Application sync history", "| E-001 | Argo CD | Application sync history")),
+    "LEDGER_QUERY_MISSING": ("errors", lambda t: mutate(
+        t, "| member-profile-api success ratio, 1m, vs prior week |", "| |")),
+    "LEDGER_COLLECTED_INVALID": ("errors", lambda t: mutate(t, "| 2026-09-23T09:10:00Z |", "| yesterday |")),
+    "LEDGER_COLLECTED_BEFORE_INCIDENT": ("errors", lambda t: mutate(
+        t, "| 2026-09-23T09:10:00Z |", "| 2026-09-22T09:10:00Z |")),
+    "LEDGER_RANGE_INVALID": ("warnings", lambda t: mutate(
+        t, "| 2026-09-22T13:00Z-16:00Z | Success rate 71%", "| around 1pm | Success rate 71%")),
     "SIGNOFF_PREFILLED": ("errors", lambda t: mutate(t, "| RCA Owner | | Pending | |", "| RCA Owner | | Approved | |")),
 }
 
@@ -132,6 +143,12 @@ def _emitted_codes():
 
 
 class GoodExample(unittest.TestCase):
+    def test_example_numbers_all_trace(self):
+        rep = validate_rca.check(EXAMPLE, "full")
+        tr = rep.info["numeric_traceability"]
+        self.assertGreater(tr["total"], 20)
+        self.assertEqual(tr["traced"], tr["total"])
+
     def test_example_passes_clean(self):
         rep = validate_rca.check(EXAMPLE, "full")
         self.assertEqual(rep.errors, [])
@@ -179,6 +196,117 @@ class SemanticBehaviour(unittest.TestCase):
         self.assertNotIn("BLAMELESS", h.codes(validate_rca.check(text, "full"))["warnings"])
 
 
+def untraced(text, **kw):
+    rep = validate_rca.check(text, "full", **kw)
+    return [w["message"] for w in rep.warnings if w["code"] == "CITATION_NUMBER_UNTRACED"], rep
+
+
+class NumericTraceability(unittest.TestCase):
+    CLAIM = "**Member impact:** 29% of profile lookup"
+
+    def test_changed_number_is_flagged_and_named(self):
+        msgs, rep = untraced(mutate(EXAMPLE, self.CLAIM, "**Member impact:** 41% of profile lookup"))
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("41", msgs[0])
+        self.assertIn("E-001", msgs[0])
+        self.assertEqual(rep.info["numeric_traceability"]["total"] - rep.info["numeric_traceability"]["traced"], 1)
+
+    def test_strict_promotes_warning_to_error(self):
+        text = mutate(EXAMPLE, self.CLAIM, "**Member impact:** 41% of profile lookup")
+        rep = validate_rca.check(text, "full", strict=True)
+        self.assertIn("CITATION_NUMBER_UNTRACED", h.codes(rep)["errors"])
+        self.assertNotIn("CITATION_NUMBER_UNTRACED", h.codes(rep)["warnings"])
+
+    def test_number_may_come_from_any_cited_row(self):
+        # 41 is only in E-099's finding; cite both rows and it traces.
+        text = mutate(EXAMPLE, self.CLAIM, "**Member impact:** 41% of profile lookup")
+        text = mutate(text, "about 410,000 failed requests out of 1.41 million [E-001].",
+                      "about 410,000 failed requests out of 1.41 million [E-001] [E-010].")
+        text = mutate(text, "Connections 22% of max; query latency flat", "Connections 22% of max; 41% of lookups sampled")
+        self.assertEqual(untraced(text)[0], [])
+
+    def test_formatting_variants_trace(self):
+        for old, new in [("1.9 s", "1.9s"), ("29%", "29 %"), ("410,000", "410000"), ("1.41 million", "1.41M")]:
+            with self.subTest(old=old):
+                text = mutate(EXAMPLE, "(29% failed: about 410,000 of 1.41 million requests)",
+                              "(29% failed: about 410,000 of 1.41 million requests)".replace(old, new))
+                self.assertEqual(untraced(text)[0], [])
+
+    def test_scaled_reading_traces(self):
+        # Claim says 1.41 million; the ledger row spells it out.
+        text = mutate(EXAMPLE, "of 1.41 million requests", "of 1,410,000 requests")
+        self.assertEqual(untraced(text)[0], [])
+
+    def test_derived_marker_exempts_listed_numbers(self):
+        text = mutate(EXAMPLE, "[derived: 44 min = 14:07Z to 14:51Z; 12.8 = 0.29 x 44; 43.2 = 30 days x 1440 x 0.001; 29.5% = 12.8 / 43.2] ", "")
+        msgs, _ = untraced(text)
+        self.assertEqual(len(msgs), 1)
+        for token in ("44", "12.8", "29.5", "43.2"):
+            self.assertIn(token, msgs[0])
+
+    def test_tags_exempt_the_sentence(self):
+        text = mutate(EXAMPLE, self.CLAIM, "**Member impact:** 41% of profile lookup")
+        text = mutate(text, "about 410,000 failed requests out of 1.41 million [E-001].",
+                      "about 410,000 failed requests out of 1.41 million [E-001] [ASSUMPTION].")
+        self.assertEqual(untraced(text)[0], [])
+
+    def test_timestamps_ids_and_status_classes_are_not_quantities(self):
+        qs = validate_rca.quantities("At 14:07Z (2026-09-22T14:07:00Z) CF-3 and A-5 on INC0098765 saw 5xx for P2 [E-001].")
+        self.assertEqual(qs, [])
+
+    def test_list_markers_and_headings_are_ignored(self):
+        self.assertEqual(validate_rca.quantities("1. Why did it fail?"), [])
+        self.assertEqual([t for t, _ in validate_rca.quantities("- 8 pods restarted")], ["8"])
+
+    def test_only_cited_sentences_are_checked(self):
+        # The cited sentence is checked ...
+        text = mutate(EXAMPLE, "showed an error state for affected members;", "showed an error state for 9999 members;")
+        self.assertEqual(len(untraced(text)[0]), 1)
+        # ... an earlier sentence on the same line, with no citation of its own, is not.
+        text2 = mutate(EXAMPLE, "- **Blast radius:**", "- **Blast radius:** 9999 hosts. Unrelated:")
+        self.assertEqual(untraced(text2)[0], [])
+
+    def test_table_cells_are_checked_separately(self):
+        text = mutate(EXAMPLE, "DB connections at 22% of max and latency flat [E-010]",
+                      "DB connections at 87% of max and latency flat [E-010]")
+        msgs, _ = untraced(text)
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("87", msgs[0])
+
+    def test_scale_words(self):
+        self.assertEqual(sorted(validate_rca.number_values("1.41 million and 3k")), [1.41, 3.0, 3000.0, 1410000.0])
+
+
+class LedgerFields(unittest.TestCase):
+    def test_range_formats(self):
+        ok = ["2026-09-22T13:00Z-16:00Z", "2026-09-22T13:00:00Z-2026-09-22T16:00:00Z",
+              "2026-09-21T00:00Z-2026-09-22T14:00Z", "2026-09-22T13:00Z to 16:00Z"]
+        for text in ok:
+            with self.subTest(text=text):
+                self.assertIsNotNone(validate_rca.parse_ledger_range(text))
+        for text in ["", "around 1pm", "13:00-16:00", "2026-09-22T13:00Z", "2026-09-22T13:00Z-99:99Z"]:
+            with self.subTest(text=text):
+                self.assertIsNone(validate_rca.parse_ledger_range(text))
+
+    def test_range_start_after_end_is_flagged(self):
+        text = mutate(EXAMPLE, "| 2026-09-22T13:00Z-16:00Z | Success rate 71%", "| 2026-09-22T16:00Z-13:00Z | Success rate 71%")
+        self.assertIn("LEDGER_RANGE_INVALID", h.codes(validate_rca.check(text, "full"))["warnings"])
+
+    def test_collection_gap_row_may_lack_a_range(self):
+        text = mutate(EXAMPLE, "| 2026-09-22T13:00Z-16:00Z | Success rate 71%", "| n/a | collection gap: query returned no data. Success rate 71%")
+        self.assertNotIn("LEDGER_RANGE_INVALID", h.codes(validate_rca.check(text, "full"))["warnings"])
+
+    def test_collected_equal_to_impact_start_is_allowed(self):
+        text = mutate(EXAMPLE, "| 2026-09-23T09:10:00Z |", "| 2026-09-22T14:07:00Z |")
+        self.assertNotIn("LEDGER_COLLECTED_BEFORE_INCIDENT", h.codes(validate_rca.check(text, "full"))["errors"])
+
+    def test_id_gaps_are_informational(self):
+        text = drop_lines(EXAMPLE, prefix="| E-005 |")
+        rep = validate_rca.check(text, "full")
+        self.assertEqual(rep.info["ledger_id_gaps"], ["E-005"])
+        self.assertNotIn("ledger_id_gaps", validate_rca.check(EXAMPLE, "full").info)
+
+
 class Tiers(unittest.TestCase):
     def test_lite_allows_missing_sections_8_and_9(self):
         text = cut_section(cut_section(EXAMPLE, "8"), "9")
@@ -217,9 +345,19 @@ class Cli(unittest.TestCase):
             res = self.run_cli(str(h.EXAMPLE), "--json", str(out))
             self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
             data = json.loads(out.read_text(encoding="utf-8"))
-        self.assertEqual(set(data), {"file", "tier", "passed", "errors", "warnings", "info"})
+        self.assertEqual(set(data), {"file", "tier", "strict", "passed", "errors", "warnings", "info"})
         self.assertTrue(data["passed"])
         self.assertEqual(data["tier"], "full")
+
+    def test_strict_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = Path(d) / "untraced.md"
+            doc.write_text(mutate(EXAMPLE, "**Member impact:** 29% of profile lookup", "**Member impact:** 41% of profile lookup"),
+                           encoding="utf-8")
+            self.assertEqual(self.run_cli(str(doc)).returncode, 0)
+            res = self.run_cli(str(doc), "--strict")
+            self.assertEqual(res.returncode, 1, res.stdout)
+            self.assertIn("CITATION_NUMBER_UNTRACED", res.stdout)
 
     def test_tier_flag_is_applied(self):
         with tempfile.TemporaryDirectory() as d:

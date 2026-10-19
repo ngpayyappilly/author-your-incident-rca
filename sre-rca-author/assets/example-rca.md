@@ -24,7 +24,7 @@ For 44 minutes on 22 September, 29% of member profile lookups failed, degrading 
 ## 3. Impact Analysis
 
 - **Member impact:** 29% of profile lookup requests returned 5xx or timed out between 14:07Z and 14:51Z, about 410,000 failed requests out of 1.41 million [E-001].
-- **SLO impact:** SLI is request success rate with a 99.9% objective over 30 days. A 29% error rate for 44 minutes equals about 12.8 full-outage minutes, which is 29.5% of the 43.2-minute monthly error budget [E-001].
+- **SLO impact:** SLI is request success rate with a 99.9% objective over 30 days. A 29% error rate for 44 minutes equals about 12.8 full-outage minutes, which is 29.5% of the 43.2-minute monthly error budget [derived: 44 min = 14:07Z to 14:51Z; 12.8 = 0.29 x 44; 43.2 = 30 days x 1440 x 0.001; 29.5% = 12.8 / 43.2] [E-001].
 - **Business and operational impact:** Sign-in succeeded but account pages showed an error state for affected members; support contacts rose during the window [E-009].
 - **Blast radius:** All regions served by the shared production cluster; no impact on the payments or search services, which do not call this API [E-004].
 
@@ -81,7 +81,7 @@ The first hop to deviate from baseline was the service's own database connection
 
 - **TTD / TTA / TTM / TTR:** 12 min / 4 min / 32 min / 63 min, computed from the metadata timestamps.
 - **How we found out:** A synthetic profile check paged on-call at 14:19Z; no SLI-based alert fired [E-005].
-- **Detection gap:** The service has an availability SLO but no burn-rate alert, so a 29% error rate was only caught by an external check [E-005].
+- **Detection gap:** The service has an availability SLO but no burn-rate alert, so a 29% error rate was only caught by an external check [E-001] [E-005].
 - **Response effectiveness:** The on-call acknowledged within 4 minutes. The revert decision was delayed by a database investigation because no runbook linked recent config changes to pool symptoms [E-006].
 - **What went well:** The previous revision was intact in Git and the revert took under two minutes once decided [E-007].
 - **What went poorly:** The change was not surfaced in the incident channel until 14:38Z, although the sync event was visible in Argo CD from 14:02Z [E-006].
@@ -122,13 +122,13 @@ No security impact identified: access logs and audit events for the window show 
 
 | ID | Source | Query / Link | Time Range | Key Finding | Collected (UTC) |
 |---|---|---|---|---|---|
-| E-001 | Splunk Observability | member-profile-api success ratio, 1m, vs prior week | 2026-09-22T13:00Z-16:00Z | Success rate 71% during impact vs 99.96% baseline; recovered 14:51Z | 2026-09-23T09:10:00Z |
+| E-001 | Splunk Observability | member-profile-api success ratio, 1m, vs prior week | 2026-09-22T13:00Z-16:00Z | Success rate 71% during impact vs 99.96% baseline (29% failed: about 410,000 of 1.41 million requests); recovered 14:51Z | 2026-09-23T09:10:00Z |
 | E-002 | Argo CD | Application sync history, member-profile-api | 2026-09-22T13:30Z-14:30Z | Revision synced 14:02:10Z; diff shows maxPoolSize 40 to 8 | 2026-09-23T09:14:00Z |
-| E-003 | Dynatrace | DB pool wait time and in-use, per pod | 2026-09-22T13:00Z-16:00Z | Pool wait p99 3 ms to 1.9 s; in-use 8/8 on all pods from 14:07Z | 2026-09-23T09:20:00Z |
+| E-003 | Dynatrace | DB pool wait time and in-use, per pod | 2026-09-22T13:00Z-16:00Z | Pool wait p99 3 ms to 1.9 s; pool size 8 per pod (previously 40); in-use 8/8 on all pods from 14:07Z | 2026-09-23T09:20:00Z |
 | E-004 | Mesh metrics and VirtualService | Request rate to service; route retry config | 2026-09-22T13:00Z-16:00Z | Retries attempts: 3; request rate 2.6x baseline from 14:08Z | 2026-09-23T09:26:00Z |
-| E-005 | Synthetic monitoring and alert history | Alert firing log, profile check | 2026-09-22T13:30Z-15:30Z | Synthetic alert 14:19:10Z; no SLI burn alert exists | 2026-09-23T09:31:00Z |
-| E-006 | Incident channel transcript | Export of INC0098765 channel | 2026-09-22T14:19Z-15:15Z | Ack 14:23Z; DB investigation; revert decision 14:41Z; change surfaced 14:38Z | 2026-09-23T09:40:00Z |
-| E-007 | Argo CD | Rollback sync event | 2026-09-22T14:40Z-15:00Z | Previous revision synced 14:49:30Z; errors cleared by 14:51Z | 2026-09-23T09:44:00Z |
+| E-005 | Synthetic monitoring and alert history | Alert firing log, profile check | 2026-09-22T13:30Z-15:30Z | Synthetic alert 14:19:10Z, 12 min after impact start; no SLI burn alert exists | 2026-09-23T09:31:00Z |
+| E-006 | Incident channel transcript | Export of INC0098765 channel | 2026-09-22T14:19Z-15:15Z | Ack 14:23Z; DB investigation 18 min (14:23Z to 14:41Z) before revert decision; change surfaced 14:38Z | 2026-09-23T09:40:00Z |
+| E-007 | Argo CD | Rollback sync event | 2026-09-22T14:40Z-15:00Z | Previous revision synced 14:49:30Z; errors cleared by 14:51Z, within 90 seconds of the sync | 2026-09-23T09:44:00Z |
 | E-008 | Git and CI | PR review record and pipeline run for the values change | 2026-09-21T00:00Z-2026-09-22T14:00Z | Reviewed without load test; CI has no range check for pool size | 2026-09-23T09:50:00Z |
 | E-009 | Ticket system | INC0098765 record and access audit query | 2026-09-22T14:00Z-15:30Z | Support contacts up; audit shows no unauthorized access | 2026-09-23T09:55:00Z |
 | E-010 | Database metrics | Connections and query latency | 2026-09-22T13:00Z-16:00Z | Connections 22% of max; query latency flat | 2026-09-23T10:00:00Z |
